@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 import revtorch as rv
 from datetime import datetime
+import math
 
 def apply_stochastic_depth(seq: nn.Sequential, max_p=1.0, min_p=0.5):
     return nn.Sequential(*[Stochastic(mod, p) for p, mod in zip(np.linspace(max_p, min_p, len(seq)), seq)])
@@ -331,8 +332,43 @@ class LEAD(nn.Module):
         for i, moe in enumerate(self.moes):
             moe.append(Expert(d_model, TwoLP(d_model, dim), name=f"{name} of Layer {i}"))
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int,  max_len: int = 1000, logger=nn.Identity()):
+        super().__init__()
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+        self.max_len = max_len
+        self.d_model = d_model
+        self.logger = logger
+
+    def forward(self, x):
+        if x.shape[1] > self.max_len:
+            self.logger(f"PositionalEncoding: updated max length: {self.max_len} -> {x.shape[1]}")
+            self.__init__(self.d_model, x.shape[1], logger=self.logger)
+        x = x + self.pe[:, :x.size(0)]
+        return x
+
+class MemoryWrapper(nn.Module):
+    def __init__(self, d_model, model):
+        super(MemoryWrapper, self).__init__()
+        self.memory_embedding = torch.randn(d_model)
+        self.model = model
+
+    def forward(self, x, memory):
+        memory += self.memory_embedding
+        out = self.model(torch.cat([x, memory], dim=1))
+        out, mem = out[:, :x.shape[1], :], out[:, x.shape[1]:, :]
+        return out, mem
 
 #model = LEAD(logger=print)
 #seq = torch.randn(1, 100000, 256)
 #out = model(seq)
 #print(out.shape)
+
+pe = PositionalEncoding(logger=print, d_model=256)
+seq = torch.randn(1, 10000, 256)
+pe(seq)
