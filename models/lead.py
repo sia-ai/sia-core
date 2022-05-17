@@ -352,23 +352,26 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, :x.size(0)]
         return x
 
-class MemoryWrapper(nn.Module):
+class LEADForSIA(nn.Module):
     def __init__(self, d_model, model):
-        super(MemoryWrapper, self).__init__()
+        super(LEADForSIA, self).__init__()
         self.memory_embedding = torch.randn(d_model)
         self.model = model
+        self.pe = PositionalEncoding(d_model)
+        self.positional_encoding = self.pe
+        self.__device_check_param__ = torch.BoolTensor(1)
+        self.d_model = d_model
 
     def forward(self, x, memory):
-        memory += self.memory_embedding
         out = self.model(torch.cat([x, memory], dim=1))
         out, mem = out[:, :x.shape[1], :], out[:, x.shape[1]:, :]
         return out, mem
-
-#model = LEAD(logger=print)
-#seq = torch.randn(1, 100000, 256)
-#out = model(seq)
-#print(out.shape)
-
-pe = PositionalEncoding(logger=print, d_model=256)
-seq = torch.randn(1, 10000, 256)
-pe(seq)
+    
+    # allocate new memory
+    def allocate(self, length):
+        device = self.__device_check_param__.device
+        memory = torch.zeros(length, self.d_model)
+        memory = self.pe(memory)
+        memory + self.memory_embedding
+        memory = memory.to(device)
+        return memory
