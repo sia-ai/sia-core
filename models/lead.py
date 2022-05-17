@@ -86,7 +86,7 @@ class Expert(nn.Module):
 class MixtureOfExperts(nn.Module):
     def __init__(self, d_model, experts=[], num_available_experts=4, logger=nn.Identity()):
         super(MixtureOfExperts, self).__init__()
-        self.experts = experts
+        self.experts = nn.ModuleList(experts)
         self.d_model = d_model
         self.logger = logger  # logger function. required callable
         self.num_available_experts = num_available_experts

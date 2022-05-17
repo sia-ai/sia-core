@@ -19,9 +19,11 @@ class Capability:
     def train(self, num_epoch, device=None, logger=tqdm.write, **kwargs):
         if not device:
             device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-            for epoch in tqdm(range(num_epoch)):
-                self.train_epoch(**self.setup_training(device=device, logger=logger, **kwargs))
+        logger("Setup training...")
+        settings = self.setup_training(device = device, logger=logger, **kwargs)
+        logger("Setup Complete!")
+        for epoch in tqdm(range(num_epoch)):
+            self.train_epoch(**settings)
 
     def setup_training(self):
         pass
