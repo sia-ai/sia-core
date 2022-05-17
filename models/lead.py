@@ -104,11 +104,9 @@ class MixtureOfExperts(nn.Module):
         self.logger(f"selected experts: {', '.join([e.name for e in available_experts])}")
 
         gw = F.softmax(torch.stack([ expert.gate(x) for expert in available_experts], dim=2).squeeze(3), dim=2)
-        self.logger(gw.shape)
 
         # call available experts
       
-        print(x.shape)
         x = sum([expert(x) * weight.swapaxes(0,1).unsqueeze(-1) for expert, weight in zip(available_experts, gw.swapaxes(0,2))])
         return x
         
@@ -194,12 +192,13 @@ class Conv1dForLSHSort(nn.Module):
         return x
 
 class MultiheadAttentionForLSHSort(nn.Module):
-    def __init__(self, d_model, segment_size=4, n_heads=8):
+    def __init__(self, d_model, segment_size=4, n_heads=8, logger=nn.Identity()):
         super(MultiheadAttentionForLSHSort, self).__init__()
         self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
         self.seg_size = segment_size
         self.proj_qk = nn.Linear(d_model, d_model)
         self.proj_v = nn.Linear(d_model, d_model)
+        self.logger=logger
     def forward(self, x):
         # x shape = [batch_size, seq_len, d_model]
         # convert to [batch_size*seg_size, seq_len//seg_size, d_model]
@@ -210,6 +209,7 @@ class MultiheadAttentionForLSHSort(nn.Module):
         a = (seq_len + pad_seq_len) // self.seg_size
         x = torch.cat([x, x[:, 0:pad_seq_len, :]], dim=1)
         x = torch.cat(torch.chunk(x, a, dim=1), dim=0) # pack to batch
+        self.logger(f"Splitted attention {a} blocks, {self.seg_size} tokens per block")
         mask = torch.diag(torch.BoolTensor(self.seg_size)).to(x.device)
         x, _ = self.attn(self.proj_qk(x), self.proj_qk(x), self.proj_v(x), attn_mask=mask)
         x = torch.cat(torch.chunk(x, a, dim=0), dim=1)
@@ -217,9 +217,9 @@ class MultiheadAttentionForLSHSort(nn.Module):
         return x
 
 class LSHAttention(nn.Module):
-    def __init__(self, d_model, n_heads=8, segment_size=4):
+    def __init__(self, d_model, n_heads=8, segment_size=4, logger=nn.Identity()):
         super(LSHAttention, self).__init__()
-        self.seq = WithLSHSort(d_model, n_heads, MultiheadAttentionForLSHSort(d_model, segment_size=segment_size, n_heads=n_heads))
+        self.seq = WithLSHSort(d_model, n_heads, MultiheadAttentionForLSHSort(d_model, segment_size=segment_size, n_heads=n_heads, logger=logger))
 
     def forward(self, x):
         return self.seq(x)
@@ -286,7 +286,7 @@ class LEAD(nn.Module):
                     Stochastic(
                         nn.Sequential(# F block: spatial mixer
                             nn.LayerNorm(d_model),
-                            spatial_mixer_class(d_model, **spatial_mixer_kwargs),
+                            spatial_mixer_class(d_model, logger=logger, **spatial_mixer_kwargs),
                             ),
                         p=d_prob
                         ),
@@ -311,7 +311,7 @@ class LEAD(nn.Module):
         x1, x2 = torch.chunk(x, 2, dim=2)
         x = (x1 + x2) / 2
         delta_time = datetime.now() - start_time
-        self.logger(f"finished processing at f{delta_time.total_seconds()}seconds")
+        self.logger(f"finished processing at {delta_time.total_seconds()}seconds")
         return x
 
     @property
@@ -332,7 +332,7 @@ class LEAD(nn.Module):
             moe.append(Expert(d_model, TwoLP(d_model, dim), name=f"{name} of Layer {i}"))
 
 
-model = LEAD()
-seq = torch.randn(3, 7, 256)
-out = model(seq)
-print(out.shape)
+#model = LEAD(logger=print)
+#seq = torch.randn(1, 100000, 256)
+#out = model(seq)
+#print(out.shape)
