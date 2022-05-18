@@ -64,10 +64,10 @@ class ByteLevelTokenizer():
                 res_bytes.append(b)
         return bytes(res_bytes).decode(self.encoding, errors='replace')
 
-    def encode(self, sentence, max_len=None):
+    def encode(self, sentence, max_len=None, insertable=True):
         if type(sentence) == str:
             return self._pad(sentence, max_len=max_len)
-        mat = [self._encode_single_(s) for s in sentence]
+        mat = [self._encode_single_(s, insertable=insertable) for s in sentence]
         return self._pad(mat, max_len)
 
     def decode(self, sequence):
@@ -172,29 +172,41 @@ class Text(Capability):
             return False
         
     def read(self, text):
-        x = self.tokenizer.encode(text, insertable=False)
+        x = self.tokenizer.encode([text], insertable=False)
+        x = torch.LongTensor(x).to(self.pe.pe.device)
         x = self.embedding(x)
         x = self.pe(x)
         return x
 
     def write(self, memory, max_iteration=30, quality=1.0):
         # decode autoregressively
-        x = self.tokenizer.encode('')
-        x = self.embedding(x)
-        x = self.pe(x)
+        x = [[0, 257]]
+        x = torch.IntTensor(x).to(self.pe.pe.device)
         for i in range(max_iteration):
-            out, _ = self.sia.nn(x, memory)
+            # embedding
+            x = self.embedding(x)
+            x = self.pe(x)
+            x, _ = self.sia.nn(x, memory)
             # unembed
-            out = self.unembedding(out) # [batch_size, length, vocab_size]
-            out = F.softamx(out, dim=2)
+            x = self.unembedding(x) # [batch_size, length, vocab_size]
+            x = F.softmax(x, dim=2)
             # evaluate quality
-            q = float(torch.mean(torch.max(out, dim=2),dim=[0, 1]))
+            q = float(torch.mean(torch.max(x, dim=2).values,dim=[0, 1]))
             # predict word ID
-            x = torch.argmax(out, dim=2) # [batch_size, length] IntTensor
+            x = torch.argmax(x, dim=2) # [batch_size, length] IntTensor
+            
+            # decode
+            print(x)
+            x = self.tokenizer.decode(list(x))
+            print(x)
+            out = x
+            # encode
+            x = self.tokenizer.encode(x, insertable=True)
+            x = torch.IntTensor(x).to(self.pe.pe.device)
+
             if q > quality:
                 break
-        output = self.tokenizer.decode(x)
-        return output
+        return out[0]
 
     def setup_training(self,device, logger, text_file_pathes=[], num_references=5, batch_size=1, token_len=128, memory_size=128):
         target_modules = nn.ModuleList(
@@ -203,7 +215,7 @@ class Text(Capability):
                     self.embedding,
                     self.unembedding
                 ])
-        optimizer = torch.optim.Adam(target_modules.parameters())
+        optimizer = torch.optim.Adam(target_modules.parameters(), lr=1e-5)
         target_modules.train()
         criterion = nn.CrossEntropyLoss()
         dataset = TextDataset(text_file_pathes, num_references)

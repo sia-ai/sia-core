@@ -349,6 +349,7 @@ class PositionalEncoding(nn.Module):
         if x.shape[1] > self.max_len:
             self.logger(f"PositionalEncoding: updated max length: {self.max_len} -> {x.shape[1]}")
             self.__init__(self.d_model, x.shape[1], logger=self.logger)
+        x = x.to(self.pe.device)
         x = x + self.pe[:, :x.size(0)]
         return x
 
@@ -359,7 +360,6 @@ class LEADForSIA(nn.Module):
         self.model = model
         self.pe = PositionalEncoding(d_model)
         self.positional_encoding = self.pe
-        self.__device_check_param__ = torch.BoolTensor(1)
         self.d_model = d_model
 
     def forward(self, x, memory):
@@ -369,9 +369,9 @@ class LEADForSIA(nn.Module):
     
     # allocate new memory
     def allocate(self, length):
-        device = self.__device_check_param__.device
         memory = torch.zeros(length, self.d_model)
         memory = self.pe(memory)
+        self.memory_embedding = self.memory_embedding.to(memory.device)
         memory + self.memory_embedding
-        memory = memory.to(device)
+
         return memory
