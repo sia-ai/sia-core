@@ -163,7 +163,7 @@ class WithLSHSort(nn.Module):
 
         
         # scatter
-        x = torch.scatter(torch.zeros_like(x) ,1, indexes, x)
+        x = torch.scatter(x ,1, indexes, x)
 
         # concatenate heads
         x = x.reshape(x.shape[0], x.shape[1], self.d_model)
