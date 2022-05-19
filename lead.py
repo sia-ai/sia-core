@@ -164,7 +164,7 @@ class LSHAttention(nn.Module):
     def __lazy_init__(self, d_model, n_heads, bucket_size, shared_qk, bias_qk, bias_v, bias_out):
         assert d_model % n_heads == 0, f"d_model({d_model}) must be divied by n_heads({n_heads})"
         self.hash = nn.Linear(d_model, n_heads*2, bias=False)
-        self.proj_q = nn.Linear(d_model, d_model, biasl=bias_qk)
+        self.proj_q = nn.Linear(d_model, d_model, bias=bias_qk)
         self.proj_k = self.proj_q if shared_qk else nn.Linear(d_model, d_model, bias=bias_qk)
         self.proj_v = nn.Linear(d_model, d_model, bias=bias_v)
         self.proj_o = nn.Linear(d_model, d_model, bias=bias_out)
@@ -185,11 +185,11 @@ class LSHAttention(nn.Module):
 
         # calucate angle
         h = torch.split(h, 2, dim=2)
-        angles = torch.cat([a[:,:,0]/(a[:,:,1]+self.eps) for a in h],dim=2) # [N, L, n_heads]
+        angles = torch.cat([(a[:,:,0]/(a[:,:,1]+self.eps)).unsqueeze(2) for a in h], dim=2) # [N, L, n_heads]
 
         # caluculate indexes by angles
         indexes = torch.argsort(angles, dim=1) # [N, L, index]
-        indexes_of_each_heads = torch.split(indexes, dim=2) # list of [N, L], length = n_heads
+        indexes_of_each_heads = torch.split(indexes, 1, dim=2) # list of [N, L], length = n_heads
         
         # caluculate dimention of one head
         d_head = self.d_model // self.n_heads
@@ -199,7 +199,7 @@ class LSHAttention(nn.Module):
 
         # sort head by indexes
         def sort_by_indexes(seq, h_indexes): # seq: [N, L, d_head], h_indexes: [N, L]
-            return torch.gather(seq, h_indexes.unsqueeze(2).expand(d_head), dim=1)
+            return torch.gather(seq, 1, h_indexes.expand(-1, -1, d_head))
 
         # split q, k, v by heads
         q, k, v = [ torch.split(n, d_head, dim=2) for n in [q, k ,v] ]
@@ -215,6 +215,15 @@ class LSHAttention(nn.Module):
             padding_mask = torch.zeros(x.shape[0], x.shape[1], dtype=bool)
         
         if attn_mask == None:
-            attn_mask = torch.zeros(x.shape[0], x.shape[1], x.shape[1], dtype=bool)
+            attn_mask = torch.zeros(x.shape[0], x.shape[1], x.shape[1], dtype=bool) # [N, Tgt, Src]
 
-        
+        # integrate masks
+        padding_mask = padding_mask.unsqueeze(2).expand(-1, -1, x.shape[1]).swapaxes(1,2) # expand Tgt axis
+        integrated_mask = torch.logical_or(padding_mask, attn_mask)
+
+
+# test 
+seq = torch.randn(7,13,32)
+attn = LSHAttention()
+attn(seq)
+
