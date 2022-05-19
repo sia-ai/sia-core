@@ -174,6 +174,7 @@ class LSHAttention(nn.Module):
         self.initialized = True
 
     def forward(self, x, padding_mask=None, attn_mask=None):
+        # lazy initialization
         if not self.initialized:
             d_model = x.shape[2]
             self.__lazy_init__(d_model, self.n_heads, self.bucket_size, self.shared_qk, self.bias_qk, self.bias_v, self.bias_out)
@@ -196,3 +197,24 @@ class LSHAttention(nn.Module):
         # project q,k,v
         q, k, v = self.proj_q(x), self.proj_k(x), self.proj_v(x)
 
+        # sort head by indexes
+        def sort_by_indexes(seq, h_indexes): # seq: [N, L, d_head], h_indexes: [N, L]
+            return torch.gather(seq, h_indexes.unsqueeze(2).expand(d_head), dim=1)
+
+        # split q, k, v by heads
+        q, k, v = [ torch.split(n, d_head, dim=2) for n in [q, k ,v] ]
+        
+        # sort
+        q = [ sort_by_indexes(hseq, hi) for hseq, hi in zip(q, indexes_of_each_heads) ]
+        k = [ sort_by_indexes(hseq, hi) for hseq, hi in zip(k, indexes_of_each_heads) ]
+        v = [ sort_by_indexes(hseq, hi) for hseq, hi in zip(v, indexes_of_each_heads) ]
+        # list of [N, L, d_head], length = n_heads
+
+        # generate mask if not given it
+        if padding_mask == None:
+            padding_mask = torch.zeros(x.shape[0], x.shape[1], dtype=bool)
+        
+        if attn_mask == None:
+            attn_mask = torch.zeros(x.shape[0], x.shape[1], x.shape[1], dtype=bool)
+
+        
