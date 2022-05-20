@@ -208,7 +208,7 @@ class LSHAttention(nn.Module):
         q = [ sort_by_indexes(hseq, hi) for hseq, hi in zip(q, indexes_of_each_heads) ]
         k = [ sort_by_indexes(hseq, hi) for hseq, hi in zip(k, indexes_of_each_heads) ]
         v = [ sort_by_indexes(hseq, hi) for hseq, hi in zip(v, indexes_of_each_heads) ]
-        # list of [N, L, d_head], length = n_heads
+        # list of [N, L, 1], length = n_heads
 
         # generate mask if not given it
         if padding_mask == None:
@@ -220,6 +220,55 @@ class LSHAttention(nn.Module):
         # integrate masks
         padding_mask = padding_mask.unsqueeze(2).expand(-1, -1, x.shape[1]).swapaxes(1,2) # expand Tgt axis
         integrated_mask = torch.logical_or(padding_mask, attn_mask)
+        
+        # sort mask by LSH indexes each heads
+        integrated_mask_each_head = integrated_mask.unsqueeze(3).expand(-1, -1, -1, self.n_heads) # [N, Tgt, Src, n_heads]
+        integrated_mask_each_head = torch.split(integrated_mask_each_head, 1, dim=3) # split by heads. List of [N, Tgt Src, 1] length=n_heads
+        integrated_mask_each_head = [ hm[:, :, :, 0] for hm in integrated_mask_each_head ] # squeeze
+        
+        # sort dim=1, dim=2
+        # sort tgt
+        integrated_mask_each_head = [ torch.gather(hm, 2, hi.expand(-1, -1, x.shape[1])) for hm, hi in zip(integrated_mask_each_head, indexes_of_each_heads)]
+        # sort src
+        integrated_mask_each_head = [ torch.gather(hm, 1, torch.swapaxes(hi.expand(-1, -1, x.shape[1]), 1, 2)) for hm, hi in zip(integrated_mask_each_head, indexes_of_each_heads)]
+
+        # caluclate number of buckets
+        n_bucket = (x.shape[0] // self.bucket_size)
+        if x.shape[0] % self.bucket_size != 0 :
+            n_bucket += 1
+
+        # pad mask to n_bucket*bucket_size
+        p_src = integrated_mask_each_head[0].shape[2] - (n_bucket * self.bucket_size)
+        p_tgt = integrated_mask_each_head[0].shape[1] - ((n_bucket+1) * self.bucket_size)
+        integrated_mask_each_head = [ torch.cat([hm[:, :, :], hm[:, :, :p_src]], dim=2) for hm in integrated_mask_each_head ] #src dim
+        integrated_mask_each_head = [ torch.cat([hm[:, :, :], hm[:, :p_tgt, :]], dim=1) for hm in integrated_mask_each_head ] #tgt dim
+        # Note: bucket(n) refers bucket(n) and bucket(n+1)
+
+        # clip mask by buckets each heads
+        submasks_each_heads = []
+        for hmask in integrated_mask_each_head:
+            submasks = []
+            for n in range(n_bucket):
+                smask = hmask[:, n*self.bucket_size:(n+1)*self.bucket_size, n*self.bucket_size:(n+2)*self.bucket_size]
+                block_self_ref = torch.cat([torch.diag(torch.BoolTensor(self.bucket_size)), torch.zeros(self.bucket_size, self.bucket_size, dtype=bool)], dim=1) # [bsize, bsize*2]
+                block_self_ref = block_self_ref.unsqueeze(0).expand(smask.shape[0], -1, -1)
+                smask = torch.logical_or(smask, block_self_ref)
+                submasks.append(smask)
+            submasks = torch.cat(submasks, dim=0) # concatenate batch dimention  [batch_size * n_bucket, bucket_size, bucket_size*2]
+            #print(submasks.shape)
+            submasks_each_heads.append(submasks)
+            
+        # clip qkv
+        iq, ik, iv = [], [], []
+        for hq, hk, hv in zip(q, k, v): # loop each head
+            pass
+            
+
+        # attention
+
+        # scatter
+
+        # output projection
 
 
 # test 
