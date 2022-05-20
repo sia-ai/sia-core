@@ -69,7 +69,6 @@ class ExpertMLP(nn.Module):
         self.activation = activation
         self.initialized = False
 
-    
     def __lazy_init__(self, d_model, hidden_dim, activation):
         if not hidden_dim:
             self.hidden_dim = d_model
@@ -121,8 +120,7 @@ class MixtureOfExperts(nn.Module):
         gw, indexes = torch.topk(gw, min(self.num_available_experts, len(self.experts)))
 
         available_experts = [self.experts[i] for i in indexes]
-        self.logger(f"selected experts: {', '.join([e.name for e in available_experts])}")
-
+       
         gw = F.softmax(torch.stack([ expert.gate(x) for expert in available_experts], dim=2).squeeze(3), dim=2)
 
         # call available experts
@@ -311,9 +309,27 @@ class LSHAttention(nn.Module):
 
         return output
 
+class LEADEncoder(nn.Module):
+    def __init__(
+            self,
+            d_model = None,
+            n_heads = 8,
+            num_layers = 8,
+            num_experts = 4,
+            d_ffn = 512,
+            num_available_experts = 4,
+            bucket_size = 4,
+            stochastic_depth = 0.5,
+            shared_qk = True,
+            bias_qk = True,
+            bias_v = True,
+            bias_out = True,
+            activation = nn.GELU,
+            logger = nn.Identity()
+            ):
+        super(LEADEncoder, self).__init__()
+        # build sequence
 
-# test 
-seq = torch.randn(27,83,512)
-attn = LSHAttention()
-attn(seq)
+    def forward(self, x, attention_mask = None, padding_mask = None):
+        pass
 
