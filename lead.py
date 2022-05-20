@@ -59,7 +59,10 @@ class TwoLP(nn.Module):
             d_model = x.shape[-1]
             self.__lazy_init__(d_model, self.hidden_dim, self.activation)
             self.to(x.device)
-        return self.fc2(self.activation(self.fc1(x)))
+        x = self.fc1(x)
+        x = self.activation(x)
+        x = self.fc2(x)
+        return x
 
 class ExpertMLP(nn.Module):
     def __init__(self, d_model=None, hidden_dim=None, activation=nn.GELU()):
@@ -69,11 +72,15 @@ class ExpertMLP(nn.Module):
         self.activation = activation
         self.initialized = False
 
+        if d_model != None:
+            self.__lazy_init__(d_model, self.hidden_dim, self.activation)
+
     def __lazy_init__(self, d_model, hidden_dim, activation):
         if not hidden_dim:
-            self.hidden_dim = d_model
-            self.gate = nn.Linear(d_model, 1)
-            self.mod = TwoLP(d_model, hidden_dim, activation)
+            hidden_dim = d_model
+        self.hidden_dim = d_model
+        self.gate = nn.Linear(d_model, 1)
+        self.mod = TwoLP(d_model, hidden_dim, activation)
         
         self.initialized = True
 
@@ -309,10 +316,18 @@ class LSHAttention(nn.Module):
 
         return output
 
+class ForwardPassSettingWrapper(nn.Module):
+    def __init__(self, module):
+        super(ForwardPassSettingWrapper, self).__init__()
+        self.module = module
+        self.settings = {}
+    def forward(self, *kwargs):
+        return self.module(*kwargs, **self.settings)
+
 class LEADEncoder(nn.Module):
     def __init__(
             self,
-            d_model = None,
+            d_model = 512,
             n_heads = 8,
             num_layers = 8,
             num_experts = 4,
@@ -325,11 +340,50 @@ class LEADEncoder(nn.Module):
             bias_v = True,
             bias_out = True,
             activation = nn.GELU,
-            logger = nn.Identity()
+            logger = nn.Identity(),
             ):
         super(LEADEncoder, self).__init__()
-        # build sequence
+        self.attention_layers = []
+        self.moe_layers = []
+
+        seq = nn.ModuleList([])
+        for i in range(num_layers):
+            attention_layer = ForwardPassSettingWrapper(
+                    LSHAttention(d_model, n_heads, bucket_size, shared_qk, bias_qk, bias_v, bias_out, logger=logger)
+                    )
+            moe_layer = ForwardPassSettingWrapper(
+                    MixtureOfExperts(d_model, experts=[ExpertMLP(d_model, d_ffn, activation()) for i in range(num_experts)], num_available_experts=num_available_experts, logger=logger)
+                    )
+            seq.append(
+                    rv.ReversibleBlock(
+                        nn.Sequential(
+                            nn.LayerNorm(d_model),
+                            attention_layer
+                            ),
+                        nn.Sequential(
+                            nn.LayerNorm(d_model),
+                            moe_layer
+                            ),
+                        split_along_dim=2
+                        )
+                    )
+            self.attention_layers.append(attention_layer)
+            self.moe_layers.append(moe_layer)
+        self.seq = rv.ReversibleSequence(seq)
 
     def forward(self, x, attention_mask = None, padding_mask = None):
-        pass
+        # settings
+        for al in self.attention_layers:
+            al.settings = {
+                    'padding_mask': padding_mask,
+                    'attn_mask': attention_mask
+                    }
+        
+        # forward pass
+        x = torch.repeat_interleave(x, repeats=2, dim=2)
+        x = self.seq(x)
+        x1, x2 = torch.chunk(x, 2, dim=2)
+        x = (x1 + x2) / 2
+        return x
+
 
