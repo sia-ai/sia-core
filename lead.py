@@ -259,7 +259,6 @@ class LSHAttention(nn.Module):
                 smask = torch.logical_or(smask, block_self_ref)
                 submasks.append(smask)
             submasks = torch.cat(submasks, dim=0) # concatenate batch dimention  [batch_size * n_bucket, bucket_size, bucket_size*2]
-            #print(submasks.shape)
             submasks_each_heads.append(submasks)
             
         # clip kv
@@ -324,7 +323,7 @@ class ForwardPassSettingWrapper(nn.Module):
     def forward(self, *kwargs):
         return self.module(*kwargs, **self.settings)
 
-class LEADEncoder(nn.Module):
+class LEADLayerStack(nn.Module):
     def __init__(
             self,
             d_model = 512,
@@ -342,12 +341,12 @@ class LEADEncoder(nn.Module):
             activation = nn.GELU,
             logger = nn.Identity(),
             ):
-        super(LEADEncoder, self).__init__()
+        super(LEADLayerStack, self).__init__()
         self.attention_layers = []
         self.moe_layers = []
 
         seq = nn.ModuleList([])
-        for i in range(num_layers):
+        for i, p in zip(range(num_layers), np.linspace(1.0, stochastic_depth, num_layers)):
             attention_layer = ForwardPassSettingWrapper(
                     LSHAttention(d_model, n_heads, bucket_size, shared_qk, bias_qk, bias_v, bias_out, logger=logger)
                     )
@@ -356,16 +355,20 @@ class LEADEncoder(nn.Module):
                     )
             seq.append(
                     rv.ReversibleBlock(
-                        nn.Sequential(
-                            nn.LayerNorm(d_model),
-                            attention_layer
+                        Stochastic(
+                            nn.Sequential(
+                                nn.LayerNorm(d_model),
+                                attention_layer
                             ),
-                        nn.Sequential(
-                            nn.LayerNorm(d_model),
-                            moe_layer
-                            ),
+                            p),
+                        Stochastic(
+                            nn.Sequential(
+                                nn.LayerNorm(d_model),
+                                moe_layer
+                                ),
+                            p),
                         split_along_dim=2
-                        )
+                        ),
                     )
             self.attention_layers.append(attention_layer)
             self.moe_layers.append(moe_layer)
@@ -385,5 +388,50 @@ class LEADEncoder(nn.Module):
         x1, x2 = torch.chunk(x, 2, dim=2)
         x = (x1 + x2) / 2
         return x
+
+class PositionalEmbedding(nn.Module):
+    def __init__(self, d_model=None):
+        super(PositionalEmbedding, self).__init__()
+        self.d_model = d_model
+        self.initialized = False
+
+    def __lazy_init__(self, d_model):
+        self.embeddings = torch.randn(1, d_model)
+        self.initialized = True
+        self.d_model = d_model
+        
+    def forward(self, x):
+        if not self.initialized:
+            self.__lazy_init__(x.shape[2])
+        if x.shape[1] > self.embeddings.shape[1]:
+            # expand embeddings
+            self.embeddings = torch.cat([self.embeddings, torch.randn(self.d_model, x.shape[1]-self.embeddings.shape[0]).to(x.device)])
+        return x + self.embeddings
+
+class LEADMemoryWrapper(nn.Module):
+    def __init__(self, d_model, lead_module):
+        super(LEADMemoryWrapper, self).__init__()
+        self.d_model = d_model
+        self.lead_module = lead_module
+        self.mem_embedding = PositionalEmbedding(d_model)
+
+    def forward(self, memory, sequence, attention_mask = None, padding_mask = None):
+        if attention_mask == None:
+            attention_mask = torch.zeros(sequence.shape[0], sequence.shape[1], sequence.shape[1], dtype=bool).to(memory.device)
+        
+        if padding_mask == None:
+            padding_mask = torch.zeros(sequence.shape[0], sequence.shape[1]).to(memory.device)
+
+        attn_mask = torch.zeros(memory.shape[0], memory.shape[1]+sequence.shape[1], memory.shape[1]+sequence.shape[1], dtype=bool).to(memory.device)
+        pad_mask  = torch.zeros(memory.shape[0], memory.shape[1]+sequence.shape[1], dtype=bool).to(memory.device)
+        
+        attn_mask[:, memory.shape[1]:, memory.shape[1]:] = attention_mask
+        pad_mask[:, memory.shape[1]:] = padding_mask
+
+        memory = self.mem_embedding(memory)
+        inputs = torch.cat([memory, sequence], dim=1)
+        outputs = self.lead_module(inputs, attn_mask, pad_mask)
+        memory, sequence = outputs[:, :memory.shape[1]], outputs[:, memory.shape[1]:]
+        return memory, sequence
 
 
