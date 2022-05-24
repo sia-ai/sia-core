@@ -26,6 +26,10 @@ class Dialogue(Capability):
 
         # Initialize Embeddings
         self.embedding = BottleneckEmbedding(vocab_size, d_model, bottleneck_size)
+        # Unembedding
+        self.unembedding = nn.Sequential(nn.Linear(d_model, bottleneck_size), nn.Linear(bottleneck_size, vocab_size))
+        # Positional Encoding
+
     
     @staticmethod
     def load(file_path):
@@ -34,7 +38,7 @@ class Dialogue(Capability):
         self.sp = spm.SentencePieceProcessor(f'{self.spm_model_path}.model')
         return self
 
-    def padding_sentences(self, sentences, pad_id=3):
+    def pad_sentences(self, sentences, pad_id=3):
         max_len = max([len(s) for s in sentences])
         ret = []
         for s in sentences:
@@ -43,11 +47,18 @@ class Dialogue(Capability):
             ret.append(s)
         return ret
 
-    def read(self, some): # some: list of strings
+    def read(self, sia, memory, some): # some: list of strings
         self.sp.SetEncodeExtraOptions("bos:eos")
         id_list = [ self.sp.EncodeAsIds(s) for s in some ]
-        torch.LongTensor(id_list)
+        id_list = self.pad_sentences(id_list)
+        id_list = torch.LongTensor(id_list).to(memory.device)
+        self.embedding.to(memory.device)
+        embedded_sequece = self.embedding(id_list)
+        memory, _ = sia.nn(memory, embedded_sequece)
+        return memory
 
+    def write(self, sia, memory): # decode autoreguressively
+        pass
 
 class DialogueMessage():
     def __init__(self, message='', name='Nameless', time=None):

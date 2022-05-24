@@ -1,4 +1,5 @@
 from capabilities.dialogue import Dialogue, DialogueMessage
 
 class SIA():
-    pass
+    def __init__(self):
+        pass
