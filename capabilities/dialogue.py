@@ -47,9 +47,9 @@ class Dialogue(Capability):
             ret.append(s)
         return ret
 
-    def read(self, sia, memory, some): # some: list of strings
+    def read(self, sia, memory, some): # some: list of DialogueMessage
         self.sp.SetEncodeExtraOptions("bos:eos")
-        id_list = [ self.sp.EncodeAsIds(s) for s in some ]
+        id_list = [ self.sp.EncodeAsIds(s.to_str()) for s in some ]
         id_list = self.pad_sentences(id_list)
         id_list = torch.LongTensor(id_list).to(memory.device)
         self.embedding.to(memory.device)
@@ -62,11 +62,14 @@ class Dialogue(Capability):
         out = torch.LongTensor([3]).repeat(N, 1)
         pad = torch.LongTensor([3]).repeat(N, 1)
         next_token = pad
-        for i in range(max_sequence):
-            out = self.embedding(out)
-            next_token = torch.argmax(self.unembedding(sia.nn(memory, out)[:, -1:]), dim=1)
-            out = torch.cat([out, next_token],dim=1)
-        return out[:, -2:]
+        with torch.no_grad():
+            for i in range(max_sequence):
+                out = self.embedding(out)
+                next_token = torch.argmax(self.unembedding(sia.nn(memory, out)[:, -1:]), dim=1)
+                out = torch.cat([out, next_token],dim=1)
+        s = out[:, :-1]
+        s = [DialogueMessage(self.sp.DecodeIds(l), name="SIA") for l in list(out.cpu().numpy())]
+        return s
 
 class DialogueMessage():
     def __init__(self, message='', name='Nameless', time=None):

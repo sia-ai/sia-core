@@ -1,6 +1,6 @@
 import torch
 
-from .models.lead import LEADLayerStack, LEADMemoryWrapper
+from models.lead import LEADLayerStack, LEADMemoryWrapper
 
 class SIASession():
     def __init__(self, sia, memory):
