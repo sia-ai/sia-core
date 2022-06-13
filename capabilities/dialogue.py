@@ -57,8 +57,16 @@ class Dialogue(Capability):
         memory, _ = sia.nn(memory, embedded_sequece)
         return memory
 
-    def write(self, sia, memory): # decode autoreguressively
-        pass
+    def write(self, sia, memory, max_sequence=32): # decode autoreguressively
+        N = memory.shape[0]
+        out = torch.LongTensor([3]).repeat(N, 1)
+        pad = torch.LongTensor([3]).repeat(N, 1)
+        next_token = pad
+        for i in range(max_sequence):
+            out = self.embedding(out)
+            next_token = torch.argmax(self.unembedding(sia.nn(memory, out)[:, -1:]), dim=1)
+            out = torch.cat([out, next_token],dim=1)
+        return out[:, -2:]
 
 class DialogueMessage():
     def __init__(self, message='', name='Nameless', time=None):
